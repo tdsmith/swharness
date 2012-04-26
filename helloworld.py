@@ -3,6 +3,20 @@
 import win32com.client
 import sldworks, swcommands, swconst
 from random import random
+from math import sin, cos, sqrt, pi
+
+class Cell:
+    RADIUS = 0.025
+    def __init__(self, com=None, angle=None, sketchpoints=None, featurepoints=None):
+        self.com = com
+        self.angle = angle
+        self.sketchpoints = sketchpoints or []
+        self.featurepoints = featurepoints or []
+    def get_point_locations(self):
+        return [(self.com[0]+Cell.RADIUS*cos(self.angle), self.com[1]+Cell.RADIUS*sin(self.angle)),
+                (self.com[0]+Cell.RADIUS*cos(pi+self.angle), self.com[1]+Cell.RADIUS*sin(pi+self.angle))]
+    def __repr__(self):
+        return 'Cell(%s, %s, %s, %s)' % tuple([repr(i) for i in [self.com, self.angle, self.sketchpoints, self.featurepoints]])
 
 def get_equation_values(model, names):
     # model is an instance of sldworks.IModelDoc2 (like from ActiveDoc)
@@ -27,30 +41,48 @@ def decorate(n=5):
 
     # read the part geometry from the equations defined in the document
     geometry = get_equation_values(model, ['beam_length', 'beam_width', 'beam_height', 'base_extent'])
-    for (key,value) in geometry.iteritems(): geometry[key] = value/1000.0 # the API insists on taking values in meters
+    for (key,value) in geometry.iteritems(): geometry[key] = value
+
+    # figure where to put cells
+    cells = []
+    for i in xrange(n):
+        success = False
+        while not success:
+            # choose a center of mass
+            newcom = ((geometry['beam_width']-2*Cell.RADIUS)*random()+Cell.RADIUS,
+                       (geometry['beam_length']-2*Cell.RADIUS)*random()+Cell.RADIUS)
+            success = True
+            for othercell in cells:
+                distance = lambda p1, p2: sqrt((p2[0]-p1[0])**2 + (p2[1]-p1[1])**2)
+                if distance(newcom, othercell.com) <= 2*Cell.RADIUS: success = False
+        cells.append(Cell(newcom, random()*pi))
 
     # select the face of the beam and create a sketch on it
     beamface = part.GetEntityByName('beamface', swconst.constants.swSelFACES).GetSafeEntity
     seldata = selmgr.CreateSelectData
     beamface.Select4(False, seldata)
     skmgr.InsertSketch(False)
-
+    
     # add each of the new points and then close the sketch
-    newpoints = []
-    for i in xrange(n): newpoints.append(skmgr.CreatePoint(geometry['beam_width']*random(), -geometry['beam_length']*random(),0))
+    for cell in cells:
+        for point in cell.get_point_locations():
+            x, y = point
+            cell.sketchpoints.append(skmgr.CreatePoint(x/1000., -y/1000., 0)) # convert to meters
+
     skmgr.InsertSketch(True)
 
     # convert the sketch point into a reference geometry feature by projecting it onto the face beneath
     refpoints = []
-    for newpoint in newpoints:
-        beamface.Select4(False, seldata)
-        newpoint.Select4(True, seldata)
-        refpoints.append(featmgr.InsertReferencePoint(swconst.constants.swRefPointFaceVertexProjection, 0, 0, 1))
-    
-    return refpoints
+    for cell in cells:
+        for sketchpoint in cell.sketchpoints:
+            beamface.Select4(False, seldata)
+            sketchpoint.Select4(True, seldata)
+            cell.featurepoints.append(featmgr.InsertReferencePoint(swconst.constants.swRefPointFaceVertexProjection, 0, 0, 1))
+        
+    return cells
 
 def main():
-    return decorate()
+    cells = decorate()
 
 if __name__ == '__main__': print main()
 

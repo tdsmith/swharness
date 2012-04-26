@@ -1,17 +1,19 @@
 #!/usr/bin/python
 
 import win32com.client
-import sldworks, swcommands, swconst
+import pythoncom
+import sldworks, swcommands, swconst, cosworks
 from random import random
 from math import sin, cos, sqrt, pi
 
 class Cell:
     RADIUS = 0.025
-    def __init__(self, com=None, angle=None, sketchpoints=None, featurepoints=None):
+    def __init__(self, com=None, angle=None, sketchpoints=None, featurepoints=None, spring=None):
         self.com = com
         self.angle = angle
         self.sketchpoints = sketchpoints or []
         self.featurepoints = featurepoints or []
+        self.spring = spring
     def get_point_locations(self):
         return [(self.com[0]+Cell.RADIUS*cos(self.angle), self.com[1]+Cell.RADIUS*sin(self.angle)),
                 (self.com[0]+Cell.RADIUS*cos(pi+self.angle), self.com[1]+Cell.RADIUS*sin(pi+self.angle))]
@@ -29,10 +31,8 @@ def get_equation_values(model, names):
             if eqm.equation(i).startswith('"%s"=' % key): d[key] = eqm.value(i)
     return d
 
-def decorate(n=5):
+def decorate(swApp, n=5):
     # connect to SolidWorks and set up objects
-    swApp = sldworks.SldWorks()
-    swApp.Visible = True
     model = swApp.ActiveDoc
     part = sldworks.PartDoc(model)
     selmgr = model.SelectionManager
@@ -81,8 +81,42 @@ def decorate(n=5):
         
     return cells
 
+def springify(cw, cells):
+    cwdoc = cw.ActiveDoc
+    studymgr = cwdoc.StudyManager
+    study = None
+    for i in xrange(studymgr.StudyCount):
+        temp = studymgr.GetStudy(i)
+        if temp.Name.startswith('One-spring'):
+            study = temp
+            break
+    # force using the makepy script to handle the weird reference
+    lrm = cosworks.ICWLoadsAndRestraintsManager(study.LoadsAndRestraintsManager)
+    springtype = cosworks.constants.swsSpringConnectoryTypeBetweenVertices
+    for cell in cells:
+        errorcode = 0
+        p1, p2 = cell.featurepoints
+        cell.spring = lrm.AddSpringConnector(springtype, [p1], [p2], errorcode)
+        print type(cell.spring)
+        print type(cell.spring.SpringConnectorBeginEdit)
+        print type(cell.spring._oleobj_), cell.spring._oleobj_
+        print type(lrm._oleobj_), lrm._oleobj_
+        cell.spring.SpringConnectorBeginEdit()
+        cell.spring.PreLoadForceType = cosworks.constants.swsPreLoadForceTypeCompression
+        cell.spring.PreLoadForceValue = 1e-6
+        cell.spring.NormalRadialStiffnessValue = 10
+        cell.spring.SpringConnectorEndEdit
+        
+    return cells
+
 def main():
-    cells = decorate()
+    swApp = sldworks.SldWorks()
+    swApp.Visible = True
+    cw = swApp.GetAddInObject("SldWorks.Simulation").COSMOSWORKS
+    
+    cells = decorate(swApp)
+    springify(cw, cells)
+    return cells
 
 if __name__ == '__main__': print main()
 
